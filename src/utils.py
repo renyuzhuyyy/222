@@ -104,60 +104,46 @@ class TensorBoardBmode(tf.keras.callbacks.TensorBoard):
 
     def __init__(self, val_data, *args, **kwargs):
         # Use base class initialization
-        self.val_data = val_data
+        self.val_data = val_data  # Validation data to be used for TensorBoard
         super().__init__(*args, **kwargs)
 
-    def set_model(self, *args, **kwargs):
+    def set_model(self, model):
         """ Override set_model function to add image TensorBoard summaries. """
-        # Use base class implementation
-        super().set_model(*args, **kwargs)
+        super().set_model(model)
 
         # Make ground truth, NN B-mode, and DAS B-mode images
         dynamic_range = [-60, 0]
         bimg = make_bmode_tf(self.model.inputs[0])  # DAS B-mode image
         yhat = self.model.outputs[0]  # Predictions
-        if tf.__version__ <= "1.13.0":
-            ytgt = self.model.targets[0]  # Ground truth
-        else:
-            ytgt = self.model._targets[0]  # Ground truth
+        ytgt = self.val_data[1]  # Use passed ground truth directly from validation data
 
-        # For some reason, tf.keras gives ytgt unknown shape, so reshape it to match yhat
-        szy = yhat.get_shape().as_list()
-        szy[0] = -1
+        # Adjust the shape of ground truth to match prediction if necessary
+        szy = tf.shape(yhat)
         ytgt = tf.reshape(ytgt, szy)
+
+        # Process images for TensorBoard display
         yhat, bimg, ytgt = make_tensorboard_images(dynamic_range, yhat, bimg, ytgt)
 
+        # Prepare summaries
         self.bsumm = tf.summary.image("Bmode", bimg)
         self.ysumm = tf.summary.image("Target", ytgt)
         self.psumm = tf.summary.image("Output", yhat)
 
-    def on_epoch_end(self, epoch, logs={}):
+    def on_epoch_end(self, epoch, logs=None):
         """ At the end of each epoch, add prediction images to TensorBoard."""
-        # Use base class implementation
         super().on_epoch_end(epoch, logs)
-        if tf.__version__ <= "1.13.0":
-            feed_dict = {
-                self.model.inputs[0]: self.val_data[0],
-                self.model.targets[0]: self.val_data[1],
-            }
-        else:
-            feed_dict = {
-                self.model.inputs[0]: self.val_data[0],
-                self.model._targets[0]: self.val_data[1],
-            }
-
-# Add the input and target summary to TensorBoard only on first epoch
+        # Prepare data for summaries
         if epoch == 0:
-            bs, ys = tf.keras.backend.get_session().run(
-                [self.bsumm, self.ysumm], feed_dict=feed_dict
-            )
+            bs, ys = self._sess.run([self.bsumm, self.ysumm], feed_dict={self.model.input: self.val_data[0]})
             self.writer.add_summary(bs, 0)
             self.writer.add_summary(ys, 0)
 
         # Add the predictions every 10 epochs
         if epoch % 10 == 9:
-            # Add the predicted image summary to TensorBoard every epoch
-            ps = tf.keras.backend.get_session().run(self.psumm, feed_dict=feed_dict)
+            ps = self._sess.run(self.psumm, feed_dict={self.model.input: self.val_data[0]})
             self.writer.add_summary(ps, epoch + 1)
 
         self.writer.flush()
+
+    def _sess(self):
+        return tf.keras.backend.get_session()
